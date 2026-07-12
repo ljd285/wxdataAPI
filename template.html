@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Informe climatológico de España – Últimos {{ dias_atras }} días</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Segoe UI", Roboto, sans-serif;
+    background: #f4f6f8; color: #1a1a1a; padding: 30px;
+  }
+  h1 { text-align: center; font-size: 1.8rem; margin-bottom: 4px; }
+  .subtitle { text-align: center; color: #666; margin-bottom: 28px; font-size: .95rem; }
+
+  /* --- TARJETAS --- */
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 16px; max-width: 1100px; margin: 0 auto 32px;
+  }
+  .card {
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 20px;
+  }
+  .card-title { font-size: 12px; color: #888; text-transform: uppercase; letter-spacing: .5px; }
+  .card-value { font-size: 30px; font-weight: 700; margin: 6px 0; }
+  .card-detail { font-size: 12px; color: #999; line-height: 1.4; }
+
+  /* --- GRÁFICOS --- */
+  .charts-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 20px; max-width: 1100px; margin: 0 auto 32px;
+  }
+  .chart-box {
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08); padding: 20px;
+  }
+  .chart-box h3 { font-size: 13px; color: #555; margin-bottom: 12px; }
+
+  /* --- CONTROLES --- */
+  .controls {
+    max-width: 1100px; margin: 0 auto 12px;
+    display: flex; gap: 10px; flex-wrap: wrap; align-items: center;
+  }
+  input, select {
+    padding: 8px 12px; border-radius: 8px;
+    border: 1px solid #ddd; font-size: 14px;
+  }
+  .badge {
+    margin-left: auto; font-size: 12px; color: #888;
+    background: #eee; padding: 4px 10px; border-radius: 20px;
+  }
+  button.btn-export {
+    padding: 8px 14px; border-radius: 8px; border: 1px solid #ddd;
+    background: #fff; font-size: 13px; cursor: pointer; color: #444;
+  }
+  button.btn-export:hover { background: #f0f0f0; }
+
+  /* --- TABLA --- */
+  .table-wrapper {
+    max-width: 1100px; margin: 0 auto;
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 2px 10px rgba(0,0,0,.08);
+    overflow: auto; max-height: 600px;
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { padding: 8px 10px; border-bottom: 1px solid #eee; white-space: nowrap; }
+  th {
+    position: sticky; top: 0; background: #fafafa;
+    cursor: pointer; color: #555; font-size: 12px;
+    text-transform: uppercase; user-select: none;
+  }
+  th:hover { background: #f0f0f0; }
+  th.sorted-asc::after  { content: " ↑"; color: #0059C9; }
+  th.sorted-desc::after { content: " ↓"; color: #0059C9; }
+  tr:hover td { background: #f9fbff; }
+
+  .updated { text-align:center; margin-top: 16px; font-size: 12px; color: #bbb; }
+</style>
+</head>
+<body>
+
+<h1>🇪🇸 Informe climatológico de España</h1>
+<div class="subtitle">Últimos {{ dias_atras }} días · AEMET OpenData · {{ registros|length }} registros</div>
+
+<!-- TARJETAS RESUMEN -->
+<div class="cards">
+  {% set tarjetas = [
+    ("tmax",  "🌡️", "Temp. máxima nacional",       "tmax",  "°C"),
+    ("tmin",  "❄️", "Temp. mínima nacional",        "tmin",  "°C"),
+    ("racha", "💨", "Racha de viento más fuerte",   "racha", " km/h"),
+    ("prec",  "🌧️", "Precipitación más alta",       "prec",  " mm"),
+  ] %}
+  {% for key, icon, titulo, campo, unidad in tarjetas %}
+    {% set dato = extremos[key] %}
+    <div class="card">
+      <div class="card-title">{{ icon }} {{ titulo }}</div>
+      {% if dato %}
+        <div class="card-value">{{ dato[campo] }}{{ unidad }}</div>
+        <div class="card-detail">{{ dato.estacion }} ({{ dato.provincia }})<br>{{ dato.fecha }}</div>
+      {% else %}
+        <div class="card-value" style="font-size:18px;color:#ccc">Sin datos</div>
+      {% endif %}
+    </div>
+  {% endfor %}
+</div>
+
+<!-- GRÁFICOS TEMPORALES -->
+<div class="charts-grid">
+  <div class="chart-box">
+    <h3>🌡️ Temperatura media nacional (°C)</h3>
+    <canvas id="graficoTemp" height="140"></canvas>
+  </div>
+  <div class="chart-box">
+    <h3>🌧️ Precipitación total nacional (mm)</h3>
+    <canvas id="graficoPrec" height="140"></canvas>
+  </div>
+</div>
+
+<!-- CONTROLES TABLA -->
+<div class="controls">
+  <input type="text"   id="buscador"  placeholder="🔍 Buscar estación o provincia…">
+  <select id="filtroDia">
+    <option value="">Todos los días</option>
+    {% for dia in dias_disponibles %}
+      <option value="{{ dia }}">{{ dia }}</option>
+    {% endfor %}
+  </select>
+  <span class="badge" id="contadorFilas">{{ registros|length }} filas</span>
+  <button class="btn-export" onclick="exportarCSV()">⬇ Exportar CSV</button>
+</div>
+
+<!-- TABLA DE DATOS -->
+<div class="table-wrapper">
+  <table id="tablaDatos">
+    <thead>
+      <tr>
+        {% set cabeceras = [
+          "Fecha","Estación","Provincia",
+          "Temp. máx (°C)","Temp. mín (°C)",
+          "Viento medio (km/h)","Racha (km/h)","Precipitación (mm)"
+        ] %}
+        {% for cab in cabeceras %}
+          <th onclick="ordenar({{ loop.index0 }})">{{ cab }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in registros %}
+      <tr data-fecha="{{ r.fecha }}">
+        <td>{{ r.fecha }}</td>
+        <td>{{ r.estacion }}</td>
+        <td>{{ r.provincia }}</td>
+        {% for campo in ["tmax","tmin","viento_medio","racha","prec"] %}
+          {% set v = r[campo] %}
+          <td data-valor="{{ v if v is not none else '' }}">{{ v if v is not none else '-' }}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div class="updated">Generado el {{ generado }}</div>
+
+<script>
+// ── DATOS DE SERIES TEMPORALES ──────────────────────────────────
+const series = {{ series_json }};
+
+// ── GRÁFICO DE TEMPERATURA ──────────────────────────────────────
+new Chart(document.getElementById('graficoTemp'), {
+  type: 'line',
+  data: {
+    labels: series.fechas,
+    datasets: [
+      {
+        label: 'Tª máx media', data: series.tmax_media,
+        borderColor: '#e74c3c', backgroundColor: 'rgba(231,76,60,.1)',
+        tension: .3, fill: false, pointRadius: 4,
+      },
+      {
+        label: 'Tª mín media', data: series.tmin_media,
+        borderColor: '#3498db', backgroundColor: 'rgba(52,152,219,.1)',
+        tension: .3, fill: false, pointRadius: 4,
+      }
+    ]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'top' } },
+    scales: {
+      x: { ticks: { maxRotation: 45 } },
+      y: { title: { display: true, text: '°C' } }
+    }
+  }
+});
+
+// ── GRÁFICO DE PRECIPITACIÓN ────────────────────────────────────
+new Chart(document.getElementById('graficoPrec'), {
+  type: 'bar',
+  data: {
+    labels: series.fechas,
+    datasets: [{
+      label: 'Precipitación total', data: series.prec_total,
+      backgroundColor: 'rgba(52,152,219,.6)', borderColor: '#3498db',
+      borderWidth: 1,
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: { legend: { position: 'top' } },
+    scales: {
+      x: { ticks: { maxRotation: 45 } },
+      y: { title: { display: true, text: 'mm' }, beginAtZero: true }
+    }
+  }
+});
+
+// ── FILTRADO DE TABLA ───────────────────────────────────────────
+const buscador  = document.getElementById('buscador');
+const filtroDia = document.getElementById('filtroDia');
+const contador  = document.getElementById('contadorFilas');
+const filas     = Array.from(document.querySelectorAll('#tablaDatos tbody tr'));
+
+function aplicarFiltros() {
+  const texto = buscador.value.toLowerCase();
+  const dia   = filtroDia.value;
+  let visibles = 0;
+  filas.forEach(fila => {
+    const coincideTexto = fila.children[1].textContent.toLowerCase().includes(texto)
+                       || fila.children[2].textContent.toLowerCase().includes(texto);
+    const coincideDia   = !dia || fila.dataset.fecha === dia;
+    const visible = coincideTexto && coincideDia;
+    fila.style.display = visible ? '' : 'none';
+    if (visible) visibles++;
+  });
+  contador.textContent = visibles + ' filas';
+}
+
+buscador.addEventListener('input', aplicarFiltros);
+filtroDia.addEventListener('change', aplicarFiltros);
+
+// ── ORDENACIÓN DE COLUMNAS ──────────────────────────────────────
+const ths = document.querySelectorAll('#tablaDatos th');
+let colOrden = -1, ascendente = true;
+
+function ordenar(idx) {
+  const tbody = document.querySelector('#tablaDatos tbody');
+  const visibles = Array.from(tbody.querySelectorAll('tr:not([style*="none"])'));
+  const ocultas  = Array.from(tbody.querySelectorAll('tr[style*="none"]'));
+
+  if (colOrden === idx) ascendente = !ascendente;
+  else { colOrden = idx; ascendente = true; }
+
+  ths.forEach((th, i) => {
+    th.classList.remove('sorted-asc','sorted-desc');
+    if (i === idx) th.classList.add(ascendente ? 'sorted-asc' : 'sorted-desc');
+  });
+
+  visibles.sort((a, b) => {
+    const cA = a.children[idx], cB = b.children[idx];
+    const vA = cA.dataset.valor !== undefined && cA.dataset.valor !== ''
+             ? parseFloat(cA.dataset.valor) : cA.textContent.trim();
+    const vB = cB.dataset.valor !== undefined && cB.dataset.valor !== ''
+             ? parseFloat(cB.dataset.valor) : cB.textContent.trim();
+    if (typeof vA === 'number' && typeof vB === 'number') {
+      if (isNaN(vA)) return 1; if (isNaN(vB)) return -1;
+      return ascendente ? vA - vB : vB - vA;
+    }
+    return ascendente
+      ? String(vA).localeCompare(String(vB), 'es')
+      : String(vB).localeCompare(String(vA), 'es');
+  });
+
+  visibles.forEach(f => tbody.appendChild(f));
+  ocultas.forEach(f  => tbody.appendChild(f));
+}
+
+// ── EXPORTAR CSV DESDE EL NAVEGADOR ────────────────────────────
+function exportarCSV() {
+  const filasVisibles = filas.filter(f => f.style.display !== 'none');
+  const cabeceras = Array.from(ths).map(th => '"' + th.textContent.trim() + '"');
+  const lineas = [cabeceras.join(',')];
+  filasVisibles.forEach(fila => {
+    const cols = Array.from(fila.children).map(td => '"' + td.textContent.trim() + '"');
+    lineas.push(cols.join(','));
+  });
+  const blob = new Blob([lineas.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = 'aemet_datos.csv'; a.click();
+  URL.revokeObjectURL(url);
+}
+</script>
+</body>
+</html>
